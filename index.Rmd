@@ -1,0 +1,419 @@
+---
+title: "3MDAN1_10Clase11"
+author: "Rossy Cañari"
+date: "2023-11-02"
+output: 
+  html_document:
+    theme: flatly
+    toc: true
+    toc_float: true
+---
+
+```{css, echo = FALSE}
+  .watch-out{
+  font-size: 10px;
+}
+```
+
+
+```{r setup, include=FALSE}
+options(width = 999)
+knitr::opts_chunk$set(echo = TRUE, message = FALSE, warning = FALSE
+                      , fig.width = 6
+                      , out.width = "400px"
+                      #, out.width = "100%"
+                      , class.source = "watch-out")
+```
+
+
+# Pasos
+
+1. Carga de la data
+2. Limpieza de datos
+3. Manejar NAs
+4. Seleccionar variables
+5. Graficar base de datos
+6. Cálculo de las Distancia de Mahalanobis y gráfico de barras
+7. Cálculo del valor umbral y gráfico de barras
+8. Gráfico Ojiva
+9. QQ plot
+10. Identificar valor máximo de Mahalanobis y eliminarlo
+11. Cálculo de la distancia de Mahalanabis y gráfico de barras nuevamente
+12. Gráfico de Ojiva Nuevamente
+
+
+\
+\
+
+# 1. Carga de data
+
+```{r}
+dfe <- read.delim("DatosEmpresa.dat")
+head(dfe)
+```
+
+\
+\
+
+# 2. Limpieza de datos
+
+```{r}
+library(dplyr)
+
+dfe <- dfe %>% 
+  #Codificar los valores
+  mutate(
+    GENERO = case_when(
+      GENERO == 0 ~ "Hombre",
+      GENERO == 1 ~ "Mujer",
+      TRUE ~ NA
+    ),
+    MINORIA = case_when(
+      MINORIA == 0 ~ "Blanco",
+      MINORIA == 1 ~ "No blanco",
+      TRUE ~ NA
+    ),
+    CATTRAB = case_when(
+      CATTRAB == 0 ~ NA,
+      CATTRAB == 1 ~ "Oficinista",
+      CATTRAB == 2 ~ "Asistente",
+      CATTRAB == 3 ~ "Seguridad",
+      CATTRAB == 4 ~ "Académico",
+      CATTRAB == 5 ~ "Empleado",
+      CATTRAB == 6 ~ "Ejecutivo",
+      TRUE ~ "Técnico"
+    )
+  ) %>%
+  # Convirtiendo en factores
+  mutate(
+    GENERO = factor(GENERO, levels = c("Hombre", "Mujer", NA)),
+    MINORIA = factor(MINORIA, levels = c("Blanco", "No blanco", NA)),
+    CATTRAB = factor(CATTRAB, levels = c(NA, "Oficinista", "Asistente", "Seguridad", "Académico", "Empleado", "Ejecutivo", "Técnico"))
+  ) %>% 
+  # Reemplazar por NA
+  mutate(
+    SALINIT = ifelse(SALINIT == 0, NA, SALINIT),
+    TTRABAJO = ifelse(TTRABAJO == 0, NA, TTRABAJO),
+    EDAD = ifelse(EDAD == 0, NA, EDAD),
+    SALACTUAL = ifelse(SALACTUAL == 0, NA, SALACTUAL),
+    EXPACAD = ifelse(EXPACAD == 0, NA, EXPACAD),
+    EXPTRAB = ifelse(EXPTRAB == 0, NA, EXPTRAB)
+  )
+head(dfe)
+```
+
+
+\
+\
+
+# 3. Manejar NAs
+
+Primero evaluamos la distribución de los NAs
+
+```{r}
+library(mice)
+md.pattern(dfe)
+```
+
+Vemos cuántos filas tiene al menos un NA
+
+```{r}
+dfe %>% 
+  rowwise() %>% 
+  mutate(TotalNa = ifelse(sum(is.na(across(everything()))) == 0, "No", "Al menos un NA")) %>% 
+  ungroup() %>% 
+  group_by(TotalNa) %>% 
+  summarise(Total1 = n())
+```
+
+Número de NAs por columna
+
+```{r}
+dfe %>% 
+  summarise(across(everything(), ~sum(is.na(.))))
+```
+
+Eliminar los registros que tiene al menos un NA
+
+```{r}
+dfe <- dfe %>% 
+  na.omit()
+```
+
+Validar los resultados
+
+```{r}
+dfe %>% 
+  summarise(across(everything(), ~sum(is.na(.))))
+```
+
+
+\
+\
+
+# 4. Seleccionar variables
+
+Solo se deben seleccionar **VARIABLES NUMÉRICAS**
+
+```{r}
+df <- dfe %>% 
+  dplyr::select(c(2,4,5,6,7,8))
+
+head(df)
+```
+
+
+\
+\
+
+# 5. Graficar base de datos
+
+Se grafica todos los gráficos de dispersiones entre las variables de las bases de datos
+
+```{r}
+library(GGally)
+
+df %>% 
+  ggpairs(
+    data = .,
+    columns = everything(.),
+    upper = list(continuous = "points")
+  )
+
+```
+
+
+\
+\
+
+# 6. Cálculo de Distancia de Mahalanobis y gráfico de barras
+
+```{r}
+dfDist1 <- df %>% 
+  mutate(DistMaha1 = mahalanobis(., center = colMeans(.), cov = cov(.)))
+
+```
+
+
+Se grafica mediante un gráfico de barras
+
+```{r}
+dfDist1 %>% 
+  ggplot(
+    data = .,
+    mapping = aes(x = c(1:nrow(.)), y = DistMaha1)
+  ) +
+  geom_bar(stat = "identity")
+  
+```
+
+
+\
+\
+
+# 7. Cálculo de valor umbral y gráfico de Ojiva
+
+Dado un *Nivel de significancia* dado (usualmente de 0.001 o 0.05), se calcula el valor del percentil que se para encontrar su correspondiente valor crítico 
+
+```{r}
+NivelSig <- 0.001
+p <- 1 - NivelSig
+k <- qchisq(p, df = ncol(df))
+k
+```
+
+Aquellos distancias que son mayores a ese valor crítico, se consideran que son outliers
+
+```{r}
+dfDist1 %>% 
+  mutate(
+    CriDistMaha1 = case_when(
+      DistMaha1 > k ~ "Outlier",
+      TRUE ~ "No"
+    )
+  ) %>% 
+  filter(
+    CriDistMaha1 == "Outlier" 
+  )
+```
+
+Graficando el gráfico de barras anterior, pero agregando las etiquetas de datos
+
+```{r}
+dfDist1 %>% 
+  ggplot(
+    data = ., 
+    mapping = aes(x = c(1:nrow(.)), y = DistMaha1)
+  ) +
+  geom_bar(
+    stat = "identity",
+    fill = ifelse(dfDist1$DistMaha1 > k, "red", "black")
+  ) +
+  geom_text(
+    mapping = aes(
+      label = ifelse(dfDist1$DistMaha1 > k, paste0(round(dfDist1$DistMaha1, 1), " (", row_number(sort(dfDist1$DistMaha1)), ")"), "")
+    )
+  )
+```
+
+
+
+\
+\
+
+# 8. Gráfico Ojiva
+
+Realizando el gráfico de Ojiva, donde se ordena las distancia de mahalanobis
+
+```{r}
+dfDist1 %>% 
+  dplyr::select(DistMaha1) %>% 
+  arrange(DistMaha1) %>% 
+  mutate(Prob = ppoints(1:nrow(.))) %>% 
+  ggplot(
+    data = .,
+    mapping = aes(
+      x = DistMaha1,
+      y = Prob
+    )
+  ) +
+  geom_point() +
+  geom_vline(xintercept = k, linetype = "dashed", color = "red", size = 1.5)
+```
+
+
+```{r}
+dfDist1 %>% 
+  dplyr::select(DistMaha1) %>% 
+  arrange(DistMaha1) %>% 
+  mutate(Prob = ppoints(1:nrow(.))) %>% 
+  mutate(Col1 = ifelse(DistMaha1>k, "Outlier", "No")) %>% 
+  ggplot(
+    data = .,
+    mapping = aes(
+      x = DistMaha1,
+      y = Prob,
+      color = Col1
+    )
+  ) +
+  geom_point(show.legend = FALSE) +
+  geom_vline(xintercept = k, linetype = "dashed", color = "red", size = 1.5) +
+  scale_color_manual(values = c("black", "red")) +
+  theme_classic()
+
+```
+
+
+
+\
+\
+
+# 9. QQ plot
+
+```{r}
+dfDist1 %>% 
+  dplyr::select(DistMaha1) %>% 
+  arrange(DistMaha1) %>% 
+  mutate(Prob = qchisq(ppoints(1:nrow(.)), df = ncol(df))) %>% 
+  ggplot(
+    data = .,
+    mapping = aes(
+      x = Prob,
+      y = DistMaha1
+    )
+  ) +
+  geom_point() +
+  geom_abline(intercept = 0, color = "red") +
+  theme_classic()
+```
+
+
+
+\
+\
+
+# 10. Identifica el valor máximo de Mahalanobis y eliminarlo
+
+Eliminar la distancia de Mahalanabis más alta
+
+```{r}
+dim(dfDist1)
+
+dfDist1Sin <- dfDist1 %>% 
+  filter(DistMaha1 != max(DistMaha1))
+
+dim(dfDist1Sin)
+```
+
+
+\
+\
+
+# 11. Cálculo de Mahalanobis y gráfico de barras nuevamente
+
+Volver a calcular la distancia de Mahalanobis
+
+```{r}
+dfDist2 <- dfDist1Sin %>% 
+  mutate(DistMaha2 = mahalanobis(dfDist1Sin %>% select(!DistMaha1), colMeans(dfDist1Sin %>% select(!DistMaha1)), cov(dfDist1Sin %>% select(!DistMaha1))))
+```
+
+Graficarlo
+
+```{r}
+dfDist2 %>% 
+  ggplot(
+    data = .,
+    mapping = aes(x = c(1:nrow(.)), y = DistMaha2)
+  ) +
+  geom_bar(stat = "identity")
+```
+
+```{r}
+dfDist2 %>% 
+  ggplot(
+    data = ., 
+    mapping = aes(x = c(1:nrow(.)), y = DistMaha2)
+  ) +
+  geom_bar(
+    stat = "identity",
+    fill = ifelse(dfDist2$DistMaha2 > k, "red", "black")
+  ) +
+  geom_text(
+    mapping = aes(
+      label = ifelse(dfDist2$DistMaha2 > k, paste0(round(dfDist2$DistMaha2, 1), " (", row_number(sort(dfDist2$DistMaha2)), ")"), "")
+    )
+  )
+```
+
+
+\
+\
+
+# 12. Gráfico de Ojiva Nuevamente
+
+Graficar la ojiva nuevamente
+
+```{r}
+dfDist2 %>% 
+  dplyr::select(DistMaha2) %>% 
+  arrange(DistMaha2) %>% 
+  mutate(Prob = ppoints(1:nrow(.))) %>% 
+  mutate(Col1 = ifelse(DistMaha2>k, "Outlier", "No")) %>% 
+  ggplot(
+    data = .,
+    mapping = aes(
+      x = DistMaha2,
+      y = Prob,
+      color = Col1
+    )
+  ) +
+  geom_point(show.legend = FALSE) +
+  geom_vline(xintercept = k, linetype = "dashed", color = "red", size = 1.5) +
+  scale_color_manual(values = c("black", "red")) +
+  theme_classic()
+```
+
+
+
+
